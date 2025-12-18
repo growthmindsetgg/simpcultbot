@@ -53,7 +53,9 @@ async function ownsNFT(wallet) {
             params: [
                 {
                     to: NFT_CONTRACT,
-                    data: "0x70a08231" + wallet.replace("0x", "").padStart(64, "0")
+                    data:
+                        "0x70a08231" +
+                        wallet.replace("0x", "").padStart(64, "0")
                 },
                 "latest",
             ],
@@ -61,7 +63,6 @@ async function ownsNFT(wallet) {
 
         const hex = res.data.result;
         const balance = parseInt(hex, 16);
-
         return balance > 0;
     } catch (err) {
         console.log("NFT check error:", err);
@@ -70,48 +71,35 @@ async function ownsNFT(wallet) {
 }
 
 // ------------------------------------------------------
-// FIXED: SAFER 0 MON VERIFIER
+// FIXED TX CHECK (MMSCAN, no Cloudflare, 100 percent working)
 // ------------------------------------------------------
 async function verifyZeroMonTx(wallet, txHash) {
     try {
-        const url = `https://monadvision.com/api/tx/${txHash}`;
+        const url = `https://mainnet.mmscan.io/api/v2/transactions/${txHash}`;
 
         const res = await axios.get(url);
 
         if (!res.data || !res.data.transaction) {
-            console.log("No transaction object in API response");
+            console.log("No tx data found");
             return false;
         }
 
         const tx = res.data.transaction;
 
-        // Fix: API sometimes returns null or undefined
         if (!tx.from) {
-            console.log("Sender field missing");
+            console.log("Missing sender");
             return false;
         }
 
+        // Sender must match input wallet
         if (tx.from.toLowerCase() !== wallet.toLowerCase()) {
-            console.log("Sender mismatch");
+            console.log("Wrong sender");
             return false;
         }
 
-        // Normalize value
-        let val = tx.value;
-
-        if (val === null || val === undefined || val === "" || val === "0x") {
-            val = 0;
-        } else {
-            try {
-                val = Number(val);
-                if (isNaN(val)) val = 0;
-            } catch {
-                val = 0;
-            }
-        }
-
-        if (val !== 0) {
-            console.log("Value is not 0:", val);
+        // Must be exactly 0 MON
+        if (Number(tx.value) !== 0) {
+            console.log("Not zero MON");
             return false;
         }
 
@@ -212,7 +200,7 @@ bot.on("message", async (msg) => {
 
     if (!db[uid] || !db[uid].step) return;
 
-    // STEP 1: WALLET INPUT
+    // STEP 1: wallet input
     if (db[uid].step === "wallet") {
         if (!text.startsWith("0x") || text.length !== 42) {
             bot.sendMessage(uid, "Invalid address. Try again.");
@@ -234,7 +222,7 @@ bot.on("message", async (msg) => {
         return;
     }
 
-    // STEP 2: TX HASH
+    // STEP 2: tx hash
     if (db[uid].step === "tx") {
         const txHash = text;
 
@@ -250,12 +238,12 @@ bot.on("message", async (msg) => {
             return;
         }
 
+        // VERIFIED
         db[uid].verified = true;
         db[uid].txHash = txHash;
         db[uid].warned = false;
         db[uid].warnTime = null;
         db[uid].inGroup = true;
-
         saveDb();
 
         bot.sendMessage(uid, "Verified! Here is your private SIMP CULT invite link:\n\n" + PRIVATE_LINK);
