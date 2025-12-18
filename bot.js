@@ -46,14 +46,6 @@ async function checkAlreadyMember(userId) {
 // ------------------------------------------------------
 async function ownsNFT(wallet) {
     try {
-        const url = `${RPC_URL}/?method=eth_call&params=[
-            {
-                "to": "${NFT_CONTRACT}",
-                "data": "0x70a08231000000000000000000000000${wallet.slice(2)}"
-            },
-            "latest"
-        ]`;
-
         const res = await axios.post(RPC_URL, {
             jsonrpc: "2.0",
             id: 1,
@@ -61,9 +53,7 @@ async function ownsNFT(wallet) {
             params: [
                 {
                     to: NFT_CONTRACT,
-                    data:
-                        "0x70a08231" +
-                        wallet.replace("0x", "").padStart(64, "0")
+                    data: "0x70a08231" + wallet.replace("0x", "").padStart(64, "0")
                 },
                 "latest",
             ],
@@ -79,25 +69,34 @@ async function ownsNFT(wallet) {
 }
 
 // ------------------------------------------------------
-// VERIFY 0 MON TRANSACTION VIA MONADVISION API
+// FIXED: VERIFY 0 MON TRANSACTION
 // ------------------------------------------------------
 async function verifyZeroMonTx(wallet, txHash) {
     try {
-        const url = `https://api.monadvision.com/tx/${txHash}`;
+        // FIXED URL — the ONLY change needed
+        const url = `https://monadvision.com/api/tx/${txHash}`;
 
         const res = await axios.get(url);
 
-        if (!res.data || !res.data.transaction) return false;
+        if (!res.data || !res.data.transaction) {
+            console.log("No tx data found");
+            return false;
+        }
 
         const tx = res.data.transaction;
 
-        // Must be from the same wallet
-        if (tx.from.toLowerCase() !== wallet.toLowerCase()) return false;
+        if (tx.from.toLowerCase() !== wallet.toLowerCase()) {
+            console.log("Wrong sender");
+            return false;
+        }
 
-        // Must be token transfer of 0 MON
-        if (Number(tx.value) !== 0) return false;
+        if (Number(tx.value) !== 0) {
+            console.log("Value is not 0");
+            return false;
+        }
 
         return true;
+
     } catch (err) {
         console.log("verifyZeroMonTx error:", err.message);
         return false;
