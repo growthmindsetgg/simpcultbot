@@ -61,6 +61,7 @@ async function ownsNFT(wallet) {
 
         const hex = res.data.result;
         const balance = parseInt(hex, 16);
+
         return balance > 0;
     } catch (err) {
         console.log("NFT check error:", err);
@@ -69,29 +70,48 @@ async function ownsNFT(wallet) {
 }
 
 // ------------------------------------------------------
-// FIXED: VERIFY 0 MON TRANSACTION
+// FIXED: SAFER 0 MON VERIFIER
 // ------------------------------------------------------
 async function verifyZeroMonTx(wallet, txHash) {
     try {
-        // FIXED URL — the ONLY change needed
         const url = `https://monadvision.com/api/tx/${txHash}`;
 
         const res = await axios.get(url);
 
         if (!res.data || !res.data.transaction) {
-            console.log("No tx data found");
+            console.log("No transaction object in API response");
             return false;
         }
 
         const tx = res.data.transaction;
 
-        if (tx.from.toLowerCase() !== wallet.toLowerCase()) {
-            console.log("Wrong sender");
+        // Fix: API sometimes returns null or undefined
+        if (!tx.from) {
+            console.log("Sender field missing");
             return false;
         }
 
-        if (Number(tx.value) !== 0) {
-            console.log("Value is not 0");
+        if (tx.from.toLowerCase() !== wallet.toLowerCase()) {
+            console.log("Sender mismatch");
+            return false;
+        }
+
+        // Normalize value
+        let val = tx.value;
+
+        if (val === null || val === undefined || val === "" || val === "0x") {
+            val = 0;
+        } else {
+            try {
+                val = Number(val);
+                if (isNaN(val)) val = 0;
+            } catch {
+                val = 0;
+            }
+        }
+
+        if (val !== 0) {
+            console.log("Value is not 0:", val);
             return false;
         }
 
@@ -192,7 +212,7 @@ bot.on("message", async (msg) => {
 
     if (!db[uid] || !db[uid].step) return;
 
-    // STEP 1: wallet input
+    // STEP 1: WALLET INPUT
     if (db[uid].step === "wallet") {
         if (!text.startsWith("0x") || text.length !== 42) {
             bot.sendMessage(uid, "Invalid address. Try again.");
@@ -214,7 +234,7 @@ bot.on("message", async (msg) => {
         return;
     }
 
-    // STEP 2: tx hash
+    // STEP 2: TX HASH
     if (db[uid].step === "tx") {
         const txHash = text;
 
@@ -230,11 +250,12 @@ bot.on("message", async (msg) => {
             return;
         }
 
-        // VERIFIED
         db[uid].verified = true;
         db[uid].txHash = txHash;
         db[uid].warned = false;
         db[uid].warnTime = null;
+        db[uid].inGroup = true;
+
         saveDb();
 
         bot.sendMessage(uid, "Verified! Here is your private SIMP CULT invite link:\n\n" + PRIVATE_LINK);
