@@ -53,9 +53,7 @@ async function ownsNFT(wallet) {
             params: [
                 {
                     to: NFT_CONTRACT,
-                    data:
-                        "0x70a08231" +
-                        wallet.replace("0x", "").padStart(64, "0")
+                    data: "0x70a08231" + wallet.replace("0x", "").padStart(64, "0")
                 },
                 "latest",
             ],
@@ -71,35 +69,32 @@ async function ownsNFT(wallet) {
 }
 
 // ------------------------------------------------------
-// FIXED TX CHECK (MMSCAN, no Cloudflare, 100 percent working)
+// FIXED: VERIFY 0 MON VIA RPC (ALWAYS WORKS ON RAILWAY)
 // ------------------------------------------------------
 async function verifyZeroMonTx(wallet, txHash) {
     try {
-        const url = `https://mainnet.mmscan.io/api/v2/transactions/${txHash}`;
+        const res = await axios.post(RPC_URL, {
+            jsonrpc: "2.0",
+            id: 1,
+            method: "eth_getTransactionByHash",
+            params: [txHash]
+        });
 
-        const res = await axios.get(url);
+        const tx = res.data.result;
 
-        if (!res.data || !res.data.transaction) {
-            console.log("No tx data found");
+        if (!tx) {
+            console.log("Tx not found");
             return false;
         }
 
-        const tx = res.data.transaction;
-
-        if (!tx.from) {
-            console.log("Missing sender");
-            return false;
-        }
-
-        // Sender must match input wallet
         if (tx.from.toLowerCase() !== wallet.toLowerCase()) {
             console.log("Wrong sender");
             return false;
         }
 
-        // Must be exactly 0 MON
-        if (Number(tx.value) !== 0) {
-            console.log("Not zero MON");
+        const value = parseInt(tx.value, 16);
+        if (value !== 0) {
+            console.log("Value not 0 MON");
             return false;
         }
 
@@ -238,12 +233,10 @@ bot.on("message", async (msg) => {
             return;
         }
 
-        // VERIFIED
         db[uid].verified = true;
         db[uid].txHash = txHash;
         db[uid].warned = false;
         db[uid].warnTime = null;
-        db[uid].inGroup = true;
         saveDb();
 
         bot.sendMessage(uid, "Verified! Here is your private SIMP CULT invite link:\n\n" + PRIVATE_LINK);
