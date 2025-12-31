@@ -4,6 +4,17 @@ const axios = require("axios");
 const fs = require("fs");
 
 // ------------------------------------------------------
+// GLOBAL CRASH GUARDS (MOST IMPORTANT)
+// ------------------------------------------------------
+process.on("uncaughtException", (err) => {
+    console.log("❌ Uncaught Exception:", err);
+});
+
+process.on("unhandledRejection", (reason, promise) => {
+    console.log("❌ Unhandled Rejection:", reason);
+});
+
+// ------------------------------------------------------
 // BOT + ENV CONFIG
 // ------------------------------------------------------
 const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
@@ -14,7 +25,7 @@ const GROUP_ID = process.env.GROUP_ID;
 const PRIVATE_LINK = process.env.PRIVATE_LINK;
 
 // ------------------------------------------------------
-// SIMPLE JSON DATABASE
+// JSON DATABASE (SAFE MODE)
 // ------------------------------------------------------
 let db = {};
 
@@ -37,20 +48,18 @@ function saveDb() {
 loadDb();
 
 // ------------------------------------------------------
-// CHECK IF USER ALREADY IN GROUP
+// CHECK MEMBER
 // ------------------------------------------------------
 async function checkAlreadyMember(userId) {
     try {
         const member = await bot.getChatMember(GROUP_ID, userId);
         if (member.status !== "left" && member.status !== "kicked") return true;
-    } catch (e) {
-        console.log("checkAlreadyMember error:", e.message);
-    }
+    } catch (e) {}
     return false;
 }
 
 // ------------------------------------------------------
-// CHECK IF USER HOLDS NFT
+// NFT CHECK
 // ------------------------------------------------------
 async function ownsNFT(wallet) {
     try {
@@ -72,6 +81,7 @@ async function ownsNFT(wallet) {
 
         const balance = parseInt(hex, 16);
         return balance > 0;
+
     } catch (err) {
         console.log("NFT check error:", err.message);
         return false;
@@ -79,13 +89,10 @@ async function ownsNFT(wallet) {
 }
 
 // ------------------------------------------------------
-// VERIFY 0 MON TX — FULLY SAFE
+// VERIFY 0 MON TRANSACTION
 // ------------------------------------------------------
 async function verifyZeroMonTx(wallet, txHash) {
-    if (!txHash || typeof txHash !== "string") {
-        console.log("txHash undefined");
-        return false;
-    }
+    if (!txHash || typeof txHash !== "string") return false;
 
     try {
         const res = await axios.post(RPC_URL, {
@@ -96,25 +103,16 @@ async function verifyZeroMonTx(wallet, txHash) {
         });
 
         const tx = res.data.result;
-
-        if (!tx) {
-            console.log("Tx not found");
-            return false;
-        }
-
+        if (!tx) return false;
         if (!tx.from) return false;
-        if (tx.from.toLowerCase() !== wallet.toLowerCase()) {
-            console.log("Sender mismatch");
-            return false;
-        }
+
+        if (tx.from.toLowerCase() !== wallet.toLowerCase()) return false;
 
         const value = parseInt(tx.value, 16);
-        if (value !== 0) {
-            console.log("Value not 0 MON");
-            return false;
-        }
+        if (value !== 0) return false;
 
         return true;
+
     } catch (err) {
         console.log("verifyZeroMonTx error:", err.message);
         return false;
@@ -122,132 +120,130 @@ async function verifyZeroMonTx(wallet, txHash) {
 }
 
 // ------------------------------------------------------
-// DAILY NFT RECHECK (24 HOURS)
+// DAILY NFT RECHECK
 // ------------------------------------------------------
-async function dailyRecheck() {
-    console.log("Running 24-hour NFT recheck...");
+setInterval(async () => {
+    console.log("Running daily NFT recheck...");
 
     for (const uid in db) {
         const user = db[uid];
         if (!user.inGroup) continue;
 
-        const stillHasNFT = await ownsNFT(user.wallet);
+        let stillHasNFT = false;
+        try {
+            stillHasNFT = await ownsNFT(user.wallet);
+        } catch {}
 
-        if (!stillHasNFT) {
-            if (!user.warned) {
-                bot.sendMessage(uid, "Warning: You no longer hold a SIMP CULT NFT. You have 48 hours to re-buy or be removed.");
-                user.warned = true;
-                user.warnTime = Date.now();
-                saveDb();
-            }
+        if (!stillHasNFT && !user.warned) {
+            bot.sendMessage(uid, "Warning: You no longer hold a SIMP CULT NFT. You have 48 hours to re-buy.");
+            user.warned = true;
+            user.warnTime = Date.now();
+            saveDb();
         }
     }
-}
-setInterval(dailyRecheck, 24 * 60 * 60 * 1000);
+}, 24 * 60 * 60 * 1000);
 
 // ------------------------------------------------------
-// PURGE AFTER 48 HOURS
+// PURGE CHECK
 // ------------------------------------------------------
-async function purgeCheck() {
+setInterval(async () => {
     console.log("Running purge check...");
 
     for (const uid in db) {
         const user = db[uid];
-        if (user.warned && user.warnTime) {
-            const hrs = (Date.now() - user.warnTime) / (3600 * 1000);
+        if (!user.warned || !user.warnTime) continue;
 
-            if (hrs >= 48) {
-                const stillHasNFT = await ownsNFT(user.wallet);
-                if (!stillHasNFT) {
-                    try {
-                        await bot.kickChatMember(GROUP_ID, uid);
-                        bot.sendMessage(uid, "You have been removed from the SIMP CULT private group.");
+        const hours = (Date.now() - user.warnTime) / (3600 * 1000);
+        if (hours < 48) continue;
 
-                        user.inGroup = false;
-                        user.warned = false;
-                        user.warnTime = null;
-                        saveDb();
-                    } catch (e) {
-                        console.log("Kick error:", e.message);
-                    }
-                }
+        let stillHasNFT = false;
+        try {
+            stillHasNFT = await ownsNFT(user.wallet);
+        } catch {}
+
+        if (!stillHasNFT) {
+            try {
+                await bot.kickChatMember(GROUP_ID, uid);
+                bot.sendMessage(uid, "You were removed from SIMP CULT (NFT missing).");
+
+            } catch (e) {
+                console.log("Kick error:", e.message);
             }
+
+            user.inGroup = false;
+            user.warned = false;
+            saveDb();
         }
     }
-}
-setInterval(purgeCheck, 60 * 60 * 1000);
+}, 60 * 60 * 1000);
 
 // ------------------------------------------------------
-// BOT COMMANDS
+// /start COMMAND
 // ------------------------------------------------------
 bot.onText(/\/start/, async (msg) => {
-    const uid = msg.from.id.toString();
+    try {
+        const uid = msg.from.id.toString();
 
-    const already = await checkAlreadyMember(uid);
-    if (already) {
-        return bot.sendMessage(uid, "You are already verified and inside the SIMP CULT private group.");
+        if (await checkAlreadyMember(uid)) {
+            return bot.sendMessage(uid, "You are already verified.");
+        }
+
+        bot.sendMessage(uid, "Welcome! Send your wallet address to begin.");
+
+        db[uid] = db[uid] || {};
+        db[uid].step = "wallet";
+        saveDb();
+
+    } catch (err) {
+        console.log("start crash:", err);
     }
-
-    bot.sendMessage(uid, "Welcome! Send your wallet address to begin verification.");
-
-    db[uid] = db[uid] || {};
-    db[uid].step = "wallet";
-    db[uid].verified = false;
-    saveDb();
 });
 
 // ------------------------------------------------------
-// MAIN MESSAGE HANDLER (CRASH-PROOF)
+// MAIN MESSAGE HANDLER (FULLY PROTECTED)
 // ------------------------------------------------------
 bot.on("message", async (msg) => {
-    const uid = msg.from.id.toString();
+    try {
+        const uid = msg.from.id.toString();
+        const text = msg.text?.trim();
 
-    // Ignore non-text messages fully
-    if (!msg.text || typeof msg.text !== "string") {
-        return bot.sendMessage(uid, "Send text only.");
-    }
+        if (!text) return;
 
-    const text = msg.text.trim();
+        if (!db[uid] || !db[uid].step) return;
 
-    if (!db[uid] || !db[uid].step) return;
+        // STEP 1 — WALLET
+        if (db[uid].step === "wallet") {
+            if (!text.startsWith("0x") || text.length !== 42)
+                return bot.sendMessage(uid, "Invalid wallet address.");
 
-    // STEP 1: WALLET
-    if (db[uid].step === "wallet") {
-        if (!text.startsWith("0x") || text.length !== 42) {
-            return bot.sendMessage(uid, "Invalid wallet address. Send again.");
+            const hasNFT = await ownsNFT(text);
+            if (!hasNFT) return bot.sendMessage(uid, "You do NOT hold a SIMP CULT NFT.");
+
+            db[uid].wallet = text;
+            db[uid].step = "tx";
+            saveDb();
+
+            return bot.sendMessage(uid, "Now send your 0 MON transaction hash.");
         }
 
-        const holdsNFT = await ownsNFT(text);
-        if (!holdsNFT) {
-            return bot.sendMessage(uid, "You do NOT hold a SIMP CULT NFT.");
+        // STEP 2 — TX HASH
+        if (db[uid].step === "tx") {
+            if (!text.startsWith("0x") || text.length !== 66)
+                return bot.sendMessage(uid, "Invalid transaction hash.");
+
+            const ok = await verifyZeroMonTx(db[uid].wallet, text);
+            if (!ok) return bot.sendMessage(uid, "Invalid transaction. Try again.");
+
+            db[uid].verified = true;
+            db[uid].inGroup = true;
+            db[uid].txHash = text;
+            db[uid].warned = false;
+            saveDb();
+
+            return bot.sendMessage(uid, "🎉 Verified!\nYour private SIMP CULT link:\n" + PRIVATE_LINK);
         }
 
-        db[uid].wallet = text;
-        db[uid].step = "tx";
-        saveDb();
-
-        return bot.sendMessage(uid, "Good. Now send your **0 MON transaction hash**.");
-    }
-
-    // STEP 2: TX HASH
-    if (db[uid].step === "tx") {
-        if (!text.startsWith("0x") || text.length !== 66) {
-            return bot.sendMessage(uid, "Invalid transaction hash.");
-        }
-
-        const ok = await verifyZeroMonTx(db[uid].wallet, text);
-
-        if (!ok) {
-            return bot.sendMessage(uid, "INVALID transaction. Make sure it's a 0 MON self-transaction.");
-        }
-
-        db[uid].verified = true;
-        db[uid].txHash = text;
-        db[uid].warned = false;
-        db[uid].warnTime = null;
-        db[uid].inGroup = true;
-        saveDb();
-
-        return bot.sendMessage(uid, "🎉 Verified!\nHere is your private SIMP CULT invite link:\n\n" + PRIVATE_LINK);
+    } catch (err) {
+        console.log("Message handler crash:", err);
     }
 });
